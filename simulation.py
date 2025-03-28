@@ -248,6 +248,10 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
     else:
         print("No hit speeds recorded.")
 
+
+
+    time.sleep(2)  # Cooldown BEFORE saving to prevent heat/CPU spike
+
     # Save data
     df = pd.DataFrame({
         "launch_angle_deg": angles,
@@ -267,6 +271,9 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
         filename = save_path
     # save and write
     df.to_csv(filename, mode='w', header=True, index=False)
+
+    time.sleep(1)  # Cooldown AFTER saving to let CPU chill
+
 
     # Heatmap
     heatmap_data = df.pivot(index="launch_speed_m_s", columns="launch_angle_deg", values="min_distance_to_target")
