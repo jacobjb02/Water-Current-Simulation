@@ -265,12 +265,8 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
         filename = os.path.join(data_folder, f'launch_data_{water_speed}.csv')
     else:
         filename = save_path
-    if os.path.exists(filename):
-        # Append to the file without writing the header again
-        df.to_csv(filename, mode='a', header=False, index=False)
-    else:
-        # File doesn't exist yet, so create it with the header
-        df.to_csv(filename, mode='w', header=True, index=False)
+    # save and write
+    df.to_csv(filename, mode='w', header=True, index=False)
 
     # Heatmap
     heatmap_data = df.pivot(index="launch_speed_m_s", columns="launch_angle_deg", values="min_distance_to_target")
@@ -279,6 +275,13 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
     ax = sns.heatmap(heatmap_data, cmap="RdBu_r", annot=False, linewidths=0.5)
     # target angle vertical line
     ax.axvline(x=target_angle, color='red', linestyle='--', linewidth=3)
+
+    # target_angle_left
+    target_angle_left = target_angle - (hit_span_angle/2)
+    ax.axvline(x=target_angle_left, color='red', linestyle='-', linewidth=3)
+
+    target_angle_right = target_angle + (hit_span_angle/2)
+    ax.axvline(x=target_angle_right, color='red', linestyle='-', linewidth=3)
 
     # Flip the y-axis to have lowest values at bottom
     ax.invert_yaxis()
@@ -333,14 +336,17 @@ if __name__ == '__main__':
     # Create a list of all parameter combinations
     params_list = list(itertools.product(water_speed_values, target_x_values, target_z_values, target_width_values))
 
-    # Calculate 75% of available cores
+    # Calculate 30% of available cores
     total_cores = multiprocessing.cpu_count()
-    num_workers = max(1, int(total_cores * 0.75))
+    num_workers = max(1, int(total_cores * 0.30))
     print(f"Total cores: {total_cores}, Using: {num_workers} cores for processing")
 
     # Run simulations in parallel
     with multiprocessing.Pool(processes=num_workers) as pool:
-        for _ in tqdm(pool.imap_unordered(run_simulation, params_list), total=len(params_list)):
-            pass
+        for i, _ in enumerate(
+                tqdm(pool.imap_unordered(run_simulation, params_list, chunksize=4), total=len(params_list))):
+            time.sleep(0.75)  # Small pause to reduce CPU heat
+            if i % 50 == 0 and i != 0:
+                time.sleep(10)  # Let CPU breathe every 50 tasks
 
     print("All simulations completed!")
