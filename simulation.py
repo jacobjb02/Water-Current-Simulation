@@ -20,28 +20,46 @@ def compute_force(velocity, area, drag_coefficient, density):
     return 0.5 * drag_coefficient * density * area * speed**2
 
 def compute_deceleration(velocity, areaBall, CdAir, rhoAir, CdWater, rhoWater, fraction_in_water, massBall, dt):
-    drag_air = compute_force(velocity, areaBall, CdAir, rhoAir)
-    drag_water = compute_force(velocity, areaBall, CdWater, rhoWater)
-    total_drag = (1 - fraction_in_water) * drag_air + (fraction_in_water * drag_water)
-    deceleration = total_drag / massBall
     speed = np.linalg.norm(velocity)
+    if speed == 0:
+        return velocity
 
-    if speed != 0:
-        return velocity - (velocity / speed) * deceleration * dt
-    return velocity
+    # drag
+    # drag_air = compute_force(speed, areaBall, CdAir, rhoAir)
+    drag_water = compute_force(speed, areaBall, CdWater, rhoWater)
+
+    # Weighted average drag based on fraction in water (Unity uses f = 0.5)
+    total_drag = fraction_in_water * drag_water
+
+    # Convert to scalar deceleration (a = F/m)
+    deceleration = total_drag / massBall
+
+    # Reduce speed
+    new_speed = max(speed - deceleration * dt, 0)
+
+    # Apply it in the same direction
+    return (velocity / speed) * new_speed
+
 
 def apply_water_current_force(velocity, areaBall, CdWater, rhoWater, waterSpeed, fraction_in_water, massBall, dt):
-    force_magnitude = fraction_in_water * CdWater * rhoWater * areaBall * abs(waterSpeed) * waterSpeed
-    force = np.array([force_magnitude * fraction_in_water, 0, 0])
-    acceleration = force / massBall
-    return velocity + acceleration * dt
+    drag_force = compute_force(abs(waterSpeed), areaBall, CdWater, rhoWater)
+
+    total_force = 0.5 * fraction_in_water * drag_force
+
+    # Convert to acceleration and adjust velocity in X-direction
+    delta_v = (total_force / massBall) * dt
+    velocity[0] -= delta_v  # water flows leftward in Unity
+
+    return velocity
+
 
 def target_angle_from_origin(target_x_pos, target_z_pos):
     target_angle_radians = math.atan2(target_z_pos, target_x_pos)
     target_angle_degrees = math.degrees(target_angle_radians)
     return(target_angle_degrees)
 
-def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_width, save_path = None):
+def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_width):
+
     # Measure time since running function
     start = time.time()
 
@@ -54,9 +72,9 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
     os.makedirs(figures_folder, exist_ok=True)
 
     # Constants
-    CdAir = 0.47
+    CdAir = 0
     CdWater = 0.47
-    rhoAir = 1.225
+    rhoAir = 0
     rhoWater = 1000
     massBall = 1.0
     radiusBall = 0.0457
@@ -77,10 +95,10 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
     time_total = 5
 
     # Launch Parameters
-    num_angles = 131
-    angle_range = np.linspace(1, 130, num_angles)
-    num_speeds =  51
-    speed_range = np.linspace(0.250, 5, num_speeds)
+    num_angles = 115
+    angle_range = np.linspace(15, 130, num_angles)
+    num_speeds =  50
+    speed_range = np.linspace(0.5, 5.5, num_speeds)
 
     # Data Storage
     count_hits = 0
@@ -104,6 +122,7 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
         ax.set_xlabel('X Position')
         ax.set_ylabel('Z Position')
         ax.grid(True)
+
 
     # Loop over angles
     for angle_deg in angle_range:
@@ -248,10 +267,6 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
     else:
         print("No hit speeds recorded.")
 
-
-
-    time.sleep(2)  # Cooldown BEFORE saving to prevent heat/CPU spike
-
     # Save data
     df = pd.DataFrame({
         "launch_angle_deg": angles,
@@ -265,30 +280,40 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
         "final_x_coordinate": final_x_list,
         "final_z_coordinate": final_z_list,
     })
-    if save_path is None:
-        filename = os.path.join(data_folder, f'launch_data_{water_speed}.csv')
+    filename = os.path.join(data_folder, f'simulation_data_{water_speed}.csv')
+    if os.path.exists(filename):
+        # Append to the file without writing the header again
+        df.to_csv(filename, mode='a', header=False, index=False)
     else:
-        filename = save_path
-    # save and write
-    df.to_csv(filename, mode='w', header=True, index=False)
-
-    time.sleep(1)  # Cooldown AFTER saving to let CPU chill
-
+        # File doesn't exist yet, so create it with the header
+        df.to_csv(filename, mode='w', header=True, index=False)
 
     # Heatmap
     heatmap_data = df.pivot(index="launch_speed_m_s", columns="launch_angle_deg", values="min_distance_to_target")
 
     plt.figure(figsize=(12, 6))
     ax = sns.heatmap(heatmap_data, cmap="RdBu_r", annot=False, linewidths=0.5)
-    # target angle vertical line
-    ax.axvline(x=target_angle, color='red', linestyle='--', linewidth=3)
 
-    # target_angle_left
-    target_angle_left = target_angle - (hit_span_angle/2)
-    ax.axvline(x=target_angle_left, color='red', linestyle='-', linewidth=3)
+    angle_columns = heatmap_data.columns.values
 
-    target_angle_right = target_angle + (hit_span_angle/2)
-    ax.axvline(x=target_angle_right, color='red', linestyle='-', linewidth=3)
+    # Find closest angle
+    target_col_idx = np.argmin(np.abs(angle_columns - target_angle))
+
+    # Convert target radius to angular measure (radians)
+    theta_radians = math.atan(target_radius / target_z_pos)
+    # Convert the radians to degrees
+    theta_degrees = math.degrees(theta_radians)
+
+    target_angle_neg = target_angle - theta_degrees
+    target_angle_pos = target_angle + theta_degrees
+
+    target_col_idx_neg = np.argmin(np.abs(angle_columns - target_angle_neg))
+    target_col_idx_pos = np.argmin(np.abs(angle_columns - target_angle_pos))
+
+    # target angle vertical lines
+    ax.axvline(x=target_col_idx, color='red', linestyle='--', linewidth=3)
+    ax.axvline(x=target_col_idx_neg, color='red', linestyle='--', linewidth=2)
+    ax.axvline(x=target_col_idx_pos, color='red', linestyle='--', linewidth=2)
 
     # Flip the y-axis to have lowest values at bottom
     ax.invert_yaxis()
@@ -306,10 +331,7 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
     plt.ylabel("Launch Speed (m/s)", fontsize=12)
 
     plt.tight_layout()
-    # print end time
 
-    end = time.time()
-    end_time = end - start
 
     #plt.show()
     os.makedirs('plots', exist_ok=True)
@@ -317,12 +339,20 @@ def solution_space_angles_speed(water_speed, target_x_pos, target_z_pos, target_
                                    f'heatmap_{water_speed}_{target_x_pos}_{target_z_pos}_{target_radius}.png')
     # replace figures
     if os.path.exists(figure_filename):
-        os.remove(figure_filename)
+        try:
+            os.remove(figure_filename)
+        except PermissionError:
+            # give the OS a moment to release the handle
+            time.sleep(0.01)
+            os.remove(figure_filename)
+
+    # save new figure
     plt.savefig(figure_filename, dpi=300, bbox_inches='tight')
 
+    # close figure
+    plt.close(fig)
+
     #print(f"Target Angle: {target_angle:.1f}")
-    print("========================")
-    print(f"Function took {end_time:.2f} seconds to complete")
     print("========================")
     print(f"Saved CSV: {filename}")
     print("========================")
@@ -334,11 +364,14 @@ def run_simulation(params):
     return params  # or nothing
 
 if __name__ == '__main__':
+    # Measure time since running function
+    start = time.time()
+
     # Define the parameter ranges
-    water_speed_values = [0, -1.5, -2]
-    target_x_values = [0, -0.25, -0.5]
-    target_z_values = [1.25, 1.4, 1.5]
-    target_width_values = [0.15, 0.20, 0.30]
+    water_speed_values = [-2.5, -3.0]
+    target_x_values = [-0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    target_z_values = [1.4, 1.3]
+    target_width_values = [0.15]
 
     # Create a list of all parameter combinations
     params_list = list(itertools.product(water_speed_values, target_x_values, target_z_values, target_width_values))
@@ -350,10 +383,16 @@ if __name__ == '__main__':
 
     # Run simulations in parallel
     with multiprocessing.Pool(processes=num_workers) as pool:
-        for i, _ in enumerate(
-                tqdm(pool.imap_unordered(run_simulation, params_list, chunksize=4), total=len(params_list))):
-            time.sleep(0.75)  # Small pause to reduce CPU heat
-            if i % 50 == 0 and i != 0:
-                time.sleep(10)  # Let CPU breathe every 50 tasks
+        for _ in tqdm(pool.imap_unordered(run_simulation, params_list), total=len(params_list)):
+            pass
 
+
+        # end time
+        end = time.time()
+        end_time = end - start
+
+    print("========================")
     print("All simulations completed!")
+    print("========================")
+    print(f"Function took {end_time/60:.2f} minutes to complete")
+    print("========================")
